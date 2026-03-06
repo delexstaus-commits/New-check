@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="si">
+<head>
+    <meta charset="UTF-8">
+    <title>Ultimate AI Sinhala Naturalizer</title>
+    <style>
+        :root { --p: #00d2ff; --bg: #0f172a; --card: #1e293b; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: #f1f2f6; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+        .container { background: var(--card); padding: 30px; border-radius: 20px; width: 100%; max-width: 550px; border: 1px solid #334155; }
+        h2 { color: var(--p); text-align: center; margin-bottom: 5px; }
+        .input-group { margin-top: 20px; }
+        input, button { width: 100%; padding: 14px; margin: 8px 0; border-radius: 10px; border: none; box-sizing: border-box; }
+        input { background: #0f172a; color: white; border: 1px solid #334155; }
+        button { background: var(--p); color: #000; font-weight: bold; cursor: pointer; }
+        button:disabled { background: #475569; cursor: not-allowed; }
+        .prog-box { display: none; margin-top: 20px; }
+        .bar { background: #334155; height: 10px; border-radius: 5px; overflow: hidden; }
+        .fill { background: var(--p); height: 100%; width: 0%; transition: 0.3s; }
+        .stats { display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>SRT Naturalizer Pro AI 🤖</h2>
+    <p style="font-size: 12px; text-align: center; color: #888;">පොතේ භාෂාවෙන් 100% කටවහරට.</p>
+
+    <div class="input-group">
+        <input type="password" id="apiKey" placeholder="ඔබේ Groq API Key එක මෙතනට දාන්න">
+        <input type="file" id="fileInput" accept=".srt">
+        <button id="startBtn">පරිවර්තනය අරඹන්න (AI Active)</button>
+    </div>
+
+    <div class="prog-box" id="progBox">
+        <div class="bar"><div class="fill" id="pfill"></div></div>
+        <div class="stats">
+            <span id="pcent">0%</span>
+            <span id="timer">සූදානම් වෙමින්...</span>
+        </div>
+        <div id="lineCount" style="text-align: center; font-size: 11px; margin-top: 5px;"></div>
+    </div>
+</div>
+
+<script>
+    const startBtn = document.getElementById('startBtn');
+    let startTime;
+
+    // දැවැන්ත වචන මාලාව (Backup Rules)
+    const localRules = [
+        { f: /ඔහුගේ/g, r: "උගේ" }, { f: /ඇයගේ/g, r: "ඒකිගේ" }, { f: /ඔහු/g, r: "ඌ" }, { f: /ඇය/g, r: "ඒකි" },
+        { f: /ඔවුන්ගේ/g, r: "උන්ගේ" }, { f: /ඔවුන්ට/g, r: "උන්ට" }, { f: /ඔවුන්/g, r: "උන්" },
+        { f: /මම/g, r: "මං" }, { f: /මාගේ/g, r: "මගේ" }, { f: /අපට/g, r: "අපිට" }, { f: /අප/g, r: "අපි" },
+        { f: /ඔබ/g, r: "ඔයා" }, { f: /ඔබලා/g, r: "ඔයාලා" }, { f: /මොහු/g, r: "මෙයා" }, { f: /මූ/g, r: "මූ" },
+        { f: /සඳහා/g, r: "එකට" }, { f: /පිළිබඳ/g, r: "ගැන" }, { f: /සමග/g, r: "එක්ක" }, { f: /හා/g, r: "සහ" },
+        { f: /මගින්/g, r: "හරහා" }, { f: /වෙත/g, r: "ළඟට" }, { f: /තුළ/g, r: "ඇතුළේ" }, { f: /සිට/g, r: "ඉඳන්" },
+        { f: /පමණි/g, r: "විතරයි" }, { f: /නැත/g, r: "නෑ" }, { f: /නොවේ/g, r: "නෙවෙයි" },
+        { f: /කුමක්ද/g, r: "මොකක්ද" }, { f: /කෙසේද/g, r: "කොහොමද" }, { f: /එහි/g, r: "ඕකේ" }, { f: /මෙහි/g, r: "මේකේ" }
+    ];
+
+    startBtn.onclick = async () => {
+        const file = document.getElementById('fileInput').files[0];
+        const apiKey = document.getElementById('apiKey').value.trim();
+        if (!file || !apiKey) return alert("API Key එක සහ File එක අනිවාර්යයි මචං!");
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const blocks = parseSRT(e.target.result);
+            document.getElementById('progBox').style.display = 'block';
+            startBtn.disabled = true;
+            startTime = Date.now();
+
+            let finalSRT = "";
+            const batchSize = 5; 
+
+            for (let i = 0; i < blocks.length; i += batchSize) {
+                const batch = blocks.slice(i, i + batchSize);
+                
+                // AI එකට යවන්නේ Text ටික විතරයි (Timeline ආරක්ෂිතයි)
+                const batchTexts = batch.map(b => b.text).join(' [SEP] ');
+                const fixedTexts = await callGroqAI(batchTexts, apiKey);
+                const fixedArray = fixedTexts.split(' [SEP] ');
+
+                batch.forEach((block, index) => {
+                    let text = fixedArray[index] || block.text;
+                    // Local rules backup එකක් විදිහට දුවනවා (AI එකට මගහැරුණොත්)
+                    localRules.forEach(rule => text = text.replace(rule.f, rule.r));
+                    
+                    // Smart verb fix (ගියෙමි -> ගියා)
+                    text = text.replace(/([ක-ෆ])ියෙමි/g, "$1ියා");
+                    text = text.replace(/([ක-ෆ])න්නෙමි/g, "$1න්නම්");
+                    
+                    finalSRT += `${block.id}\n${block.time}\n${text.trim()}\n\n`;
+                });
+
+                updateProgress(i + batch.length, blocks.length);
+            }
+
+            download(finalSRT.trim(), "Natural_AI_" + file.name);
+            startBtn.disabled = false;
+        };
+        reader.readAsText(file);
+    };
+
+    async function callGroqAI(text, key) {
+        const systemRole = `You are a professional Sinhala sub-title naturalizer. 
+        Your ONLY job is to convert formal/written Sinhala into raw, conversational, movie-style spoken Sinhala.
+        RULES:
+        1. Convert Past Tense: 'ගියෙමි/ගියේය' -> 'ගියා', 'කළෙමි' -> 'කළා'.
+        2. Convert Future Tense: 'යන්නෙමි' -> 'යන්නම්', 'කරන්නෙමි' -> 'කරන්නම්'.
+        3. Raw Pronouns: 'ඔහුගේ' -> 'උගේ', 'ඇයගේ' -> 'ඒකිගේ', 'ඔහු' -> 'ඌ', 'ඇය' -> 'ඒකි'.
+        4. Preserve [SEP] markers exactly. Do not translate them.
+        5. No formal words like 'සඳහා', 'පිළිබඳ', 'පැමිණියේය'. Use 'එකට', 'ගැන', 'ආවා'.
+        6. Return ONLY the translated text.`;
+
+        try {
+            const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [{ role: "system", content: systemRole }, { role: "user", content: text }],
+                    temperature: 0.1
+                })
+            });
+            const data = await res.json();
+            return data.choices[0].message.content;
+        } catch (e) { return text; }
+    }
+
+    function parseSRT(data) {
+        return data.trim().split(/\n\s*\n/).map(block => {
+            const lines = block.split('\n');
+            return { id: lines[0], time: lines[1], text: lines.slice(2).join('\n') };
+        });
+    }
+
+    function updateProgress(cur, total) {
+        const p = Math.round((cur / total) * 100);
+        document.getElementById('pfill').style.width = p + "%";
+        document.getElementById('pcent').innerText = p + "%";
+        const elapsed = (Date.now() - startTime) / 1000;
+        const remain = Math.round(((elapsed / cur) * total) - elapsed);
+        document.getElementById('timer').innerText = `ඉතිරි කාලය: ${remain}s`;
+        document.getElementById('lineCount').innerText = `පේළි ${cur} / ${total} ඉවරයි`;
+    }
+
+    function download(content, name) {
+        const blob = new Blob([content], {type: 'text/srt'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name; a.click();
+    }
+</script>
+</body>
+</html>
